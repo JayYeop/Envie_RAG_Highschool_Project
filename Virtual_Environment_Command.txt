@@ -1,0 +1,19 @@
+가상환경 사용 흐름
+
+가상환경 활성화
+
+bash
+
+
+# PowerShell
+.\venv\Scripts\Activate 
+
+(rag dev environment set up)
+
+
+conda activate rag_nomkl_env
+
+스크립트 실행
+deactivate
+
+
