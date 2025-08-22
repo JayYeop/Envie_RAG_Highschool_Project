@@ -120,15 +120,15 @@ def load_llm_and_embedder(api_provider, user_api_key): return rag_core.load_mode
 
 # --- 사이드바 UI ---
 with st.sidebar:
-     try:
-        # 현재 스크립트 파일이 있는 디렉토리의 절대 경로를 가져옵니다.
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        # assets 폴더와 이미지 파일의 경로를 조합합니다.
-        logo_path = os.path.join(script_dir, "assets", "Project_logo.png")
-        logo_image = Image.open(logo_path)
-        st.image(logo_image)
-    except FileNotFoundError:
-        st.warning("로고 이미지를 찾을 수 없습니다. (assets/Project_logo.png)")
+ try:
+    # 현재 스크립트 파일이 있는 디렉토리의 절대 경로를 가져옵니다.
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    # assets 폴더와 이미지 파일의 경로를 조합합니다.
+    logo_path = os.path.join(script_dir, "assets", "Project_logo.png")
+    logo_image = Image.open(logo_path)
+    st.image(logo_image)
+except FileNotFoundError:
+    st.warning("로고 이미지를 찾을 수 없습니다. (assets/Project_logo.png)")
     # ... (이전 사이드바 코드는 동일)
     st.subheader(lang['settings_header'])
     selected_api = st.selectbox(lang['api_select_label'], ['NVIDIA', 'Google'], index=0 if st.session_state.api_provider == 'NVIDIA' else 1)
@@ -307,3 +307,4 @@ else:
             message_placeholder.markdown(full_response)
 
         st.session_state.messages.append({"role": "assistant", "content": full_response})
+
