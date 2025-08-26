@@ -52,15 +52,14 @@ def load_documents_from_directory(directory):
 
 
 # --- (이하 load_models, get_splitters 함수는 이전과 동일) ---
-def load_models(api_provider, api_key, st_error_func):
+def load_models(api_provider, api_key):
     """주어진 API 키를 사용하여 LLM과 임베더를 로드합니다."""
 
     # 이제 이 함수는 키가 어디서 왔는지 고민할 필요가 없습니다.
     # 키가 없으면 그냥 없다고 알려주기만 하면 됩니다.
     if not api_key:
-        st_error_func(f"{api_provider} API 키가 제공되지 않았습니다.")
         return None, None
-        
+    
     try:
         if api_provider == 'NVIDIA':
             llm = ChatNVIDIA(model="mistralai/mixtral-8x7b-instruct-v0.1", nvidia_api_key=api_key)
@@ -72,7 +71,8 @@ def load_models(api_provider, api_key, st_error_func):
             return None, None
         return llm, embedder
     except Exception as e:
-        st_error_func(f"{api_provider} 모델 로딩 중 오류 발생: 잘못된 API 키일 수 있습니다. ({e})")
+        # API 키가 유효하지 않는 등 다른 오류가 발생해도 실패(None)를 반환.
+        print(f"모델 로딩 중 오류 발생: {e}")
         return None, None
     
 def get_splitters():

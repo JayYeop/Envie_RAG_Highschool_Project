@@ -113,187 +113,120 @@ LANG_TEXT = {
 }
 lang = LANG_TEXT[st.session_state['language']]
 
-# ... (헬퍼 함수 및 모델 로딩 함수는 이전과 동일)
+# --- 헬퍼 및 콜백 함수 ---
 def get_knowledge_bases(): return [d for d in os.listdir(KNOWLEDGE_BASE_DIR) if os.path.isdir(os.path.join(KNOWLEDGE_BASE_DIR, d))]
 def is_valid_kb_name(name): return re.match("^[A-Za-z0-9_-]+$", name) is not None
-def load_llm_and_embedder(api_provider, user_api_key): return rag_core.load_models(api_provider, user_api_key, st.error)
+def on_kb_change(): st.session_state.retriever = None # 수정된 코드
 
-# --- 사이드바 UI ---
+# [수정] get_models 함수의 정의가 여기에 위치해야 합니다.
+@st.cache_resource
+def get_models(api_provider, user_api_key):
+    """rag_core의 load_models를 호출하고, 그 결과를 캐싱하는 중간 관리자 함수."""
+    return rag_core.load_models(api_provider, user_api_key)
+
+# ===================================================================
+# 1. '홀' - 사이드바: 모든 사용자 설정을 여기서 받고 '주문서'에 기록
+# ===================================================================
 with st.sidebar:
-    # [수정] try...except 블록의 문법과 들여쓰기를 다시 한번 확인합니다.
-    try:
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        logo_path = os.path.join(script_dir, "assets", "Project_logo.png")
-        logo_image = Image.open(logo_path)
-        st.image(logo_image)
-    except FileNotFoundError:
-        pass
-    # ... (이전 사이드바 코드는 동일)
+    # ... (이하 사이드바 코드는 이전과 동일)
+    try: st.image(Image.open("assets/Project_logo.png"))
+    except FileNotFoundError: pass
     st.subheader(lang['settings_header'])
-    selected_api = st.selectbox(lang['api_select_label'], ['NVIDIA', 'Google'], index=0 if st.session_state.api_provider == 'NVIDIA' else 1)
-    if selected_api != st.session_state.api_provider:
-        st.session_state.api_provider = selected_api; 
-        st.session_state.messages = []; st.session_state.retriever = None
-        st.session_state.api_key_ok = False
-        st.session_state.user_api_key = None; st.rerun()
-    selected_language = st.selectbox(lang['lang_select_label'], ['English', 'Korean'], index=0 if st.session_state.language == 'English' else 1)
-    if selected_language != st.session_state.language:
-        st.session_state.language = selected_language; st.session_state.messages = []; st.rerun()
-
+    st.selectbox(lang['api_select_label'], ['NVIDIA', 'Google'], key='api_provider', on_change=lambda: setattr(st.session_state, 'api_key_ok', False))
+    st.selectbox(lang['lang_select_label'], ['English', 'Korean'], key='language')
     st.divider()
-    
-    # [신규] API 키 사용 방식을 선택하는 라디오 버튼
     st.subheader(lang['api_key_header'])
-    api_key_source = st.radio(
-        label=lang['api_key_source_label'],
-        options=[lang['api_key_source_local'], lang['api_key_source_user']],
-        key="api_key_source_widget"
-    )
-
-    # "직접 입력"을 선택했을 때만 API 키 입력창을 보여줌
-    if api_key_source == lang['api_key_source_user']:
-        user_api_key_input = st.text_input(
-            label=lang['api_key_label'].format(api_provider=st.session_state.api_provider),
-            type="password",
-            help=lang['api_key_help'],
-            key="api_key_input_widget"
-        )
-        if user_api_key_input and user_api_key_input != st.session_state.user_api_key:
-            st.session_state.user_api_key = user_api_key_input
-            st.session_state.api_key_ok = False
-            st.rerun()
-    else:
-        # ".env 파일"을 선택하면, 사용자 입력 키는 None으로 설정
-        st.session_state.user_api_key = None
-        
+    st.radio(label=lang['api_key_source_label'], options=[lang['api_key_source_local'], lang['api_key_source_user']], key="api_key_source", on_change=lambda: setattr(st.session_state, 'api_key_ok', False))
+    if st.session_state.api_key_source == lang['api_key_source_user']:
+        st.text_input(label=lang['api_key_label'].format(api_provider=st.session_state.api_provider), type="password", help=lang['api_key_help'], key="user_api_key", on_change=lambda: setattr(st.session_state, 'api_key_ok', False))
     st.divider()
-    # --- 모델 로딩 및 키 유효성 검사 ---
-    # 사이드바에서 사용자가 선택한 "API 키 사용 방식"에 따라 어떤 키를 사용할지 결정합니다.
-    final_key_to_use = None
-    if api_key_source == lang['api_key_source_local']:
-        # 옵션 1: "로컬 (.env 파일)"을 선택한 경우
-        # .env 파일에서 해당 AI 제공사의 API 키를 가져옵니다.
-        final_key_to_use = os.getenv(f"{st.session_state.api_provider.upper()}_API_KEY")
-    else: 
-        # 옵션 2: "직접 입력"을 선택한 경우
-        # 사용자가 입력하여 세션 상태에 저장된 API 키를 가져옵니다.
-        final_key_to_use = st.session_state.user_api_key
-
-    # 최종적으로 결정된 API 키를 사용하여 모델 로딩 함수를 호출합니다.
-    llm, embedder = load_llm_and_embedder(st.session_state.api_provider, final_key_to_use)
-
-    # 모델과 임베더가 성공적으로 로드되었는지 (None이 아닌지) 확인하여
-    # api_key_ok 상태를 업데이트합니다. 이 상태는 앱의 나머지 부분에서 AI 기능 활성화 여부를 결정합니다.
-    st.session_state.api_key_ok = llm is not None and embedder is not None
-    
-
-    if st.session_state.api_key_ok:
-        kb_list = get_knowledge_bases()
-        kb_options = [CREATE_NEW_KB_OPTION] + kb_list
-        selected_kb = st.selectbox(lang['kb_select_label'], options=kb_options, key="selected_kb_widget")
-        if st.session_state.selected_kb != selected_kb:
-            st.session_state.selected_kb = selected_kb; st.session_state.retriever = None; st.rerun()
-        if st.session_state.selected_kb == CREATE_NEW_KB_OPTION:
-            st.subheader(lang['new_kb_header'])
-            with st.form("new_kb_form"):
-                new_kb_name = st.text_input(lang['new_kb_name_label'], help=lang['new_kb_name_help'])
-                uploaded_files = st.file_uploader(lang['upload_label'], accept_multiple_files=True)
-                submitted = st.form_submit_button(lang['create_button'])
-                if submitted:
-                    if not new_kb_name or not is_valid_kb_name(new_kb_name): st.error(lang['invalid_kb_name_error'])
-                    elif not uploaded_files: st.warning("Please upload at least one file.")
-                    else:
-                        if os.path.exists(DOCS_DIR): shutil.rmtree(DOCS_DIR)
-                        os.makedirs(DOCS_DIR)
-                        for file in uploaded_files:
-                            with open(os.path.join(DOCS_DIR, file.name), "wb") as f: f.write(file.read())
-                        with st.spinner(lang['creating_db'].format(kb_name=new_kb_name)):
-                            rag_core.create_and_save_retriever(embedder, new_kb_name)
-                            st.success(lang['db_created_success'].format(kb_name=new_kb_name))
-                            st.session_state.selected_kb = new_kb_name; st.rerun()
-        elif st.session_state.selected_kb and st.session_state.selected_kb != CREATE_NEW_KB_OPTION:
-            st.divider()
-            st.subheader(lang['update_kb_header'])
-            with st.form("update_kb_form"):
-                update_files = st.file_uploader(lang['update_upload_label'], accept_multiple_files=True)
-                update_submitted = st.form_submit_button(lang['update_button'])
-                if update_submitted and update_files:
-                    if os.path.exists(DOCS_DIR): shutil.rmtree(DOCS_DIR)
-                    os.makedirs(DOCS_DIR)
-                    for file in update_files:
-                        with open(os.path.join(DOCS_DIR, file.name), "wb") as f: f.write(file.read())
-                    with st.spinner(lang['updating_db'].format(kb_name=st.session_state.selected_kb)):
-                        st.session_state.retriever = rag_core.update_and_save_retriever(embedder, st.session_state.selected_kb)
-                        st.success(lang['db_updated_success'].format(kb_name=st.session_state.selected_kb))
-                    if os.path.exists(DOCS_DIR): shutil.rmtree(DOCS_DIR)
-            st.divider()
-            if st.button(lang['kb_reset_button']):
-                kb_to_delete = st.session_state.selected_kb; kb_path = os.path.join(KNOWLEDGE_BASE_DIR, kb_to_delete)
-                if os.path.exists(kb_path): shutil.rmtree(kb_path)
-                st.session_state.retriever = None; st.session_state.selected_kb = None
-                st.success(lang['kb_reset_success'].format(kb_name=kb_to_delete)); st.rerun()
-    
-    # [신규] 채팅 기록 저장 및 불러오기 UI
+    kb_list = get_knowledge_bases()
+    kb_options = [CREATE_NEW_KB_OPTION] + kb_list
+    st.selectbox(lang['kb_select_label'], options=kb_options, key="selected_kb", on_change=on_kb_change)
+    if st.session_state.selected_kb == CREATE_NEW_KB_OPTION:
+        st.subheader(lang['new_kb_header'])
+        with st.form("new_kb_form"):
+            new_kb_name = st.text_input(lang['new_kb_name_label'], help=lang['new_kb_name_help'])
+            uploaded_files = st.file_uploader(lang['upload_label'], accept_multiple_files=True)
+            submitted = st.form_submit_button(lang['create_button'])
+    elif st.session_state.selected_kb:
+        st.subheader(lang['update_kb_header'])
+        with st.form("update_kb_form"):
+            update_files = st.file_uploader(lang['update_upload_label'], accept_multiple_files=True)
+            update_submitted = st.form_submit_button(lang['update_button'])
+        st.divider()
+        if st.button(lang['kb_reset_button']):
+            kb_to_delete = st.session_state.selected_kb; kb_path = os.path.join(KNOWLEDGE_BASE_DIR, kb_to_delete)
+            if os.path.exists(kb_path): shutil.rmtree(kb_path)
+            st.session_state.retriever = None; st.session_state.selected_kb = CREATE_NEW_KB_OPTION
+            st.success(lang['kb_reset_success'].format(kb_name=kb_to_delete)); st.rerun()
     st.divider()
     st.subheader(lang['chat_history_header'])
-    
-    # 1. 저장 기능
-    # 현재 시간을 포함하여 고유한 파일 이름 생성
-    now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    file_name = f"chat_history_{now}.json"
-    # st.download_button을 위한 데이터 준비 (json 형식의 문자열)
+    now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S"); file_name = f"chat_history_{now}.json"
     chat_history_json = json.dumps(st.session_state.messages, indent=2, ensure_ascii=False)
-    
-    st.download_button(
-        label=lang['chat_history_save_button'],
-        data=chat_history_json,
-        file_name=file_name,
-        mime="application/json"
-    )
+    st.download_button(label=lang['chat_history_save_button'], data=chat_history_json, file_name=file_name, mime="application/json")
+    loaded_chat_file = st.file_uploader(label=lang['chat_history_load_label'], type=['json'])
 
-    # 2. 불러오기 기능
-    loaded_chat_file = st.file_uploader(
-        label=lang['chat_history_load_label'],
-        type=['json']
-    )
-    if loaded_chat_file is not None:
-        try:
-            # 업로드된 파일의 내용을 읽고 json으로 파싱
-            loaded_messages = json.load(loaded_chat_file)
-            # st.session_state.messages를 불러온 내용으로 교체
-            st.session_state.messages = loaded_messages
-            # 화면을 새로고침하여 불러온 대화 내용 표시
-            st.rerun()
-        except json.JSONDecodeError:
-            st.error("잘못된 JSON 파일 형식입니다. 올바른 채팅 기록 파일을 업로드해주세요.")
-        except Exception as e:
-            st.error(f"파일을 불러오는 중 오류가 발생했습니다: {e}")
-
-
-# --- 리트리버 준비 ---
-# ... (이하 코드는 이전과 동일)
+# ===================================================================
+# 2. '주방' - 메인 영역: '주문서'를 보고 모든 핵심 로직을 여기서 처리
+# ===================================================================
+# ... (이하 주방 및 채팅 인터페이스 코드는 이전과 동일)
+llm, embedder = None, None
+if not st.session_state.api_key_ok:
+    key_to_use = None
+    if st.session_state.api_key_source == lang['api_key_source_local']:
+        key_to_use = os.getenv(f"{st.session_state.api_provider.upper()}_API_KEY")
+    else:
+        key_to_use = st.session_state.user_api_key
+    if key_to_use:
+        llm, embedder = get_models(st.session_state.api_provider, key_to_use)
+        st.session_state.api_key_ok = llm is not None
+if 'submitted' in locals() and submitted:
+    if not new_kb_name or not is_valid_kb_name(new_kb_name): st.error(lang['invalid_kb_name_error'])
+    elif not uploaded_files: st.warning("Please upload at least one file.")
+    elif not st.session_state.api_key_ok: st.warning(lang['api_key_missing_error'])
+    else:
+        if os.path.exists(DOCS_DIR): shutil.rmtree(DOCS_DIR)
+        os.makedirs(DOCS_DIR)
+        for file in uploaded_files:
+            with open(os.path.join(DOCS_DIR, file.name), "wb") as f: f.write(file.read())
+        with st.spinner(lang['creating_db'].format(kb_name=new_kb_name)):
+            rag_core.create_and_save_retriever(embedder, new_kb_name)
+            st.success(lang['db_created_success'].format(kb_name=new_kb_name))
+            st.session_state.selected_kb = new_kb_name; st.rerun()
+if 'update_submitted' in locals() and update_submitted:
+    if not update_files: st.warning("Please upload files to add.")
+    elif not st.session_state.api_key_ok: st.warning(lang['api_key_missing_error'])
+    else:
+        if os.path.exists(DOCS_DIR): shutil.rmtree(DOCS_DIR)
+        os.makedirs(DOCS_DIR)
+        for file in update_files:
+            with open(os.path.join(DOCS_DIR, file.name), "wb") as f: f.write(file.read())
+        with st.spinner(lang['updating_db'].format(kb_name=st.session_state.selected_kb)):
+            st.session_state.retriever = rag_core.update_and_save_retriever(embedder, st.session_state.selected_kb)
+            st.success(lang['db_updated_success'].format(kb_name=st.session_state.selected_kb))
+        if os.path.exists(DOCS_DIR): shutil.rmtree(DOCS_DIR)
+if loaded_chat_file is not None:
+    try:
+        st.session_state.messages = json.load(loaded_chat_file)
+        st.rerun()
+    except Exception as e: st.error(f"Failed to load chat file: {e}")
 if st.session_state.api_key_ok and st.session_state.retriever is None:
-    if st.session_state.selected_kb and st.session_state.selected_kb != CREATE_NEW_KB_OPTION:
+    if st.session_state.selected_kb != CREATE_NEW_KB_OPTION:
         with st.spinner(f"Loading '{st.session_state.selected_kb}'..."):
             st.session_state.retriever = rag_core.load_retriever(embedder, st.session_state.selected_kb)
         if st.session_state.retriever: st.sidebar.success(f"'{st.session_state.selected_kb}' loaded.")
-
-# --- 채팅 인터페이스 ---
 final_page_title = lang['page_title']
 if st.session_state.get('api_provider') == 'NVIDIA': final_page_title += " with NVIDIA"
 elif st.session_state.get('api_provider') == 'Google': final_page_title += " with Google"
 st.subheader(final_page_title)
-
 for message in st.session_state.messages:
     with st.chat_message(message["role"]): st.markdown(message["content"])
-
-if not st.session_state.api_key_ok:
-    st.info(lang['api_key_missing_error'])
-elif not st.session_state.retriever:
-    st.info("Please select a Knowledge Base from the sidebar, or create a new one.")
+if not st.session_state.api_key_ok: st.info(lang['api_key_missing_error'])
+elif not st.session_state.retriever: st.info("Please select a Knowledge Base from the sidebar, or create a new one.")
 else:
     rag_chain = rag_core.create_rag_chain(llm, st.session_state.retriever, lang['system_prompt'])
-    user_input = st.chat_input(lang['chat_placeholder'])
+    user_input = st.chat_input(lang['placeholder'])
     if user_input:
         st.session_state.messages.append({"role": "user", "content": user_input})
         with st.chat_message("user"): st.markdown(user_input)
